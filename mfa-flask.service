@@ -1,0 +1,15 @@
+[Unit]
+Description=MFA Flask Application
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/var/www/html/mfa-app
+Environment="PATH=/usr/bin"
+ExecStart=/usr/bin/python3 /var/www/html/mfa-app/app.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
