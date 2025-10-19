@@ -119,7 +119,7 @@ def login():
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         password_hash = hash_password(password)
         cursor.execute("""
-            SELECT id, username, email, role, is_active, last_login 
+            SELECT id, username, email, role, is_active 
             FROM users 
             WHERE username = %s AND password_hash = %s
         """, (username, password_hash))
