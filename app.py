@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify, session
-from flask_cors import CORS
 import random
 import smtplib
 from email.mime.text import MIMEText
@@ -11,7 +10,6 @@ import logging
 
 app = Flask(__name__)
 app.secret_key = 'ChangeMeInProduction2025!SecureKey'
-CORS(app, supports_credentials=True)
 
 # Configuration logging
 logging.basicConfig(
@@ -34,7 +32,7 @@ DB_CONFIG = {
     'port': 5432,
     'database': 'banking_db',
     'user': 'banking_user',
-    'password': 'postgresql',
+    'password': 'SecureP@ss2025!',
     'sslmode': 'require'
 }
 
@@ -101,7 +99,6 @@ def login():
         logging.warning(f"Champs manquants pour {username}")
         return jsonify({'status': 'error', 'message': 'Champs requis manquants'}), 400
     
-    # Connexion DB
     conn = get_db_connection()
     if not conn:
         return jsonify({'status': 'error', 'message': 'Erreur serveur'}), 500
@@ -110,7 +107,6 @@ def login():
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         password_hash = hash_password(password)
         
-        # Vérification dans la table users
         cursor.execute("""
             SELECT id, username, email, role, is_active, last_login 
             FROM users 
@@ -129,10 +125,6 @@ def login():
             logging.warning(f"Compte désactivé: {username}")
             return jsonify({'status': 'error', 'message': 'Compte désactivé'}), 403
         
-        # LOG IMPORTANT pour debug
-        logging.info(f"User trouvé - Username: {user['username']}, Email: {user['email']}, Role: {user['role']}")
-        
-        # Génération code MFA
         mfa_code = str(random.randint(100000, 999999))
         mfa_codes[username] = {
             'code': mfa_code,
@@ -142,10 +134,9 @@ def login():
             'user_id': user['id']
         }
         
-        logging.info(f"Envoi MFA vers: {user['email']} pour user: {username} (role: {user['role']})")
+        logging.info(f"Envoi MFA vers: {user['email']} pour user: {username}")
         
         if send_mfa_email(user['email'], mfa_code, username):
-            logging.info(f"Code MFA généré et envoyé pour {username}")
             return jsonify({
                 'status': 'ok',
                 'mfa_required': True,
@@ -153,7 +144,6 @@ def login():
                 'email_masked': user['email'][:3] + '***@' + user['email'].split('@')[1]
             }), 200
         else:
-            logging.error(f"Échec envoi MFA pour {username}")
             return jsonify({'status': 'error', 'message': 'Erreur envoi email'}), 500
             
     except Exception as e:
@@ -162,7 +152,6 @@ def login():
 
 @app.route('/verify-mfa', methods=['POST'])
 def verify_mfa():
-    """Authentification étape 2 : Vérification code MFA"""
     data = request.get_json()
     username = data.get('username', '').strip()
     code = data.get('code', '').strip()
@@ -173,19 +162,15 @@ def verify_mfa():
     stored = mfa_codes.get(username)
     
     if not stored:
-        logging.warning(f"Code MFA inexistant pour {username}")
         return jsonify({'status': 'error', 'message': 'Code non valide'}), 401
     
     if datetime.now() > stored['expiry']:
-        logging.warning(f"Code MFA expiré pour {username}")
         del mfa_codes[username]
         return jsonify({'status': 'error', 'message': 'Code expiré'}), 401
     
     if stored['code'] != code:
-        logging.warning(f"Code MFA incorrect pour {username}")
         return jsonify({'status': 'error', 'message': 'Code incorrect'}), 401
     
-    # Authentification réussie - Mise à jour last_login
     conn = get_db_connection()
     if conn:
         try:
@@ -200,13 +185,11 @@ def verify_mfa():
         except Exception as e:
             logging.error(f"Erreur mise à jour last_login: {str(e)}")
     
-    # Création session
     session['username'] = username
     session['role'] = stored['role']
     session['user_id'] = stored['user_id']
     del mfa_codes[username]
     
-    logging.info(f"Connexion réussie: {username} - {stored['role']}")
     return jsonify({
         'status': 'ok',
         'message': 'Connexion réussie',
@@ -214,11 +197,10 @@ def verify_mfa():
         'role': stored['role']
     }), 200
 
-# ===== ROUTES PROTÉGÉES (Admin uniquement) =====
+# ===== ROUTES PROTÉGÉES =====
 
 @app.route('/api/comptes', methods=['GET'])
 def get_comptes():
-    """Liste des comptes (Admin uniquement)"""
     if 'username' not in session:
         return jsonify({'status': 'error', 'message': 'Non authentifié'}), 401
     
@@ -242,8 +224,6 @@ def get_comptes():
         comptes = cursor.fetchall()
         cursor.close()
         conn.close()
-        
-        logging.info(f"Consultation comptes par {session['username']}")
         return jsonify({'status': 'ok', 'comptes': comptes}), 200
     except Exception as e:
         logging.error(f"Erreur requête comptes: {str(e)}")
@@ -251,7 +231,6 @@ def get_comptes():
 
 @app.route('/api/virement', methods=['POST'])
 def virement():
-    """Effectuer un virement (Admin uniquement)"""
     if 'username' not in session:
         return jsonify({'status': 'error', 'message': 'Non authentifié'}), 401
     
@@ -283,8 +262,6 @@ def virement():
     
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
-        
-        # Vérification solde
         cursor.execute("SELECT solde FROM comptes WHERE id = %s AND statut = 'actif'", (compte_source,))
         compte = cursor.fetchone()
         
@@ -292,15 +269,11 @@ def virement():
             return jsonify({'status': 'error', 'message': 'Compte source invalide'}), 404
         
         if compte['solde'] < montant:
-            logging.warning(f"Solde insuffisant - {session['username']} - Compte {compte_source}")
             return jsonify({'status': 'error', 'message': 'Solde insuffisant'}), 400
         
-        # Transaction
         cursor.execute("BEGIN")
-        
         cursor.execute("UPDATE comptes SET solde = solde - %s WHERE id = %s", (montant, compte_source))
         cursor.execute("UPDATE comptes SET solde = solde + %s WHERE id = %s", (montant, compte_dest))
-        
         cursor.execute("""
             INSERT INTO transactions 
             (compte_source_id, compte_dest_id, montant, type_transaction, description, agent_username)
@@ -309,18 +282,15 @@ def virement():
         """, (compte_source, compte_dest, montant, description, session['username']))
         
         transaction_id = cursor.fetchone()['id']
-        
         cursor.execute("COMMIT")
         cursor.close()
         conn.close()
         
-        logging.info(f"Virement réussi - {session['username']} - Transaction #{transaction_id}")
         return jsonify({
             'status': 'ok',
             'message': 'Virement effectué avec succès',
             'transaction_id': transaction_id
         }), 200
-        
     except Exception as e:
         if conn:
             conn.rollback()
@@ -329,7 +299,6 @@ def virement():
 
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
-    """Historique des transactions (Admin uniquement)"""
     if 'username' not in session:
         return jsonify({'status': 'error', 'message': 'Non authentifié'}), 401
     
@@ -359,8 +328,6 @@ def get_transactions():
         transactions = cursor.fetchall()
         cursor.close()
         conn.close()
-        
-        logging.info(f"Consultation transactions par {session['username']}")
         return jsonify({'status': 'ok', 'transactions': transactions}), 200
     except Exception as e:
         logging.error(f"Erreur requête transactions: {str(e)}")
@@ -368,7 +335,6 @@ def get_transactions():
 
 @app.route('/api/user-info', methods=['GET'])
 def get_user_info():
-    """Informations utilisateur connecté"""
     if 'username' not in session:
         return jsonify({'status': 'error', 'message': 'Non authentifié'}), 401
     
@@ -380,11 +346,10 @@ def get_user_info():
 
 @app.route('/logout', methods=['POST'])
 def logout():
-    """Déconnexion"""
     username = session.get('username', 'Unknown')
     session.clear()
     logging.info(f"Déconnexion: {username}")
     return jsonify({'status': 'ok', 'message': 'Déconnexion réussie'}), 200
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='127.0.0.1', port=5000, debug=False)
