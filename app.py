@@ -18,7 +18,7 @@ DB_CONFIG = {
     'port': 5432,
     'database': 'banking_db',
     'user': 'banking_user',
-    'password': 'SecureP@ss2025!'  # Ton mot de passe PostgreSQL
+    'password': 'Postgresql'  # Mot de passe PostgreSQL
 }
 
 SMTP_SERVER = "smtp.gmail.com"
@@ -34,17 +34,20 @@ mfa_codes = {}  # { "username": {"code":123456, "expire":datetime} }
 # =============================
 
 def get_db_connection():
+    """Connexion à PostgreSQL"""
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         return conn
     except Exception as e:
-        print("Erreur connexion DB:", e)
+        print("❌ Erreur connexion DB:", e)
         return None
 
 def hash_password(password):
+    """Hash SHA256"""
     return hashlib.sha256(password.encode()).hexdigest()
 
 def send_email(to_email, subject, body):
+    """Envoi d’un email via Gmail"""
     try:
         msg = MIMEText(body)
         msg["From"] = SMTP_USER
@@ -62,7 +65,7 @@ def send_email(to_email, subject, body):
         return False
 
 # =============================
-# 🔹 Routes API
+# 🔹 Routes API Authentification
 # =============================
 
 @app.route('/login', methods=['POST'])
@@ -138,6 +141,121 @@ def verify_mfa():
     else:
         return jsonify({"status": "error", "message": "Code incorrect"}), 401
 
+# =============================
+# 🔹 Autres routes API
+# =============================
 
+@app.route('/api/comptes', methods=['GET'])
+def get_comptes():
+    """Liste tous les comptes actifs"""
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"status": "error", "message": "Erreur base de données"}), 500
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("""
+            SELECT c.id, c.numero_compte, c.type_compte, c.solde, c.devise, c.statut,
+                   cl.nom, cl.prenom, cl.email
+            FROM comptes c
+            JOIN clients cl ON c.client_id = cl.id
+            WHERE c.statut = 'actif'
+            ORDER BY cl.nom;
+        """)
+        comptes = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok", "comptes": comptes}), 200
+    except Exception as e:
+        print("Erreur /api/comptes:", e)
+        return jsonify({"status": "error", "message": "Erreur serveur"}), 500
+
+
+@app.route('/api/transactions', methods=['GET'])
+def get_transactions():
+    """Historique des transactions récentes"""
+    limit = request.args.get('limit', 50)
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"status": "error", "message": "Erreur DB"}), 500
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute(f"""
+            SELECT t.id, t.montant, t.type_transaction, t.description, 
+                   t.date_transaction, cs.numero_compte AS compte_source,
+                   cd.numero_compte AS compte_dest
+            FROM transactions t
+            LEFT JOIN comptes cs ON t.compte_source_id = cs.id
+            LEFT JOIN comptes cd ON t.compte_dest_id = cd.id
+            ORDER BY t.date_transaction DESC
+            LIMIT %s;
+        """, (limit,))
+        transactions = cur.fetchall()
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok", "transactions": transactions}), 200
+    except Exception as e:
+        print("Erreur /api/transactions:", e)
+        return jsonify({"status": "error", "message": "Erreur serveur"}), 500
+
+
+@app.route('/api/virement', methods=['POST'])
+def virement():
+    """Effectuer un virement entre deux comptes"""
+    data = request.json
+    source = data.get('compte_source_id')
+    dest = data.get('compte_dest_id')
+    montant = data.get('montant')
+    description = data.get('description', '')
+
+    if not all([source, dest, montant]):
+        return jsonify({"status": "error", "message": "Champs manquants"}), 400
+
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"status": "error", "message": "Erreur DB"}), 500
+
+    try:
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT solde FROM comptes WHERE id = %s", (source,))
+        solde = cur.fetchone()
+        if not solde or solde["solde"] < float(montant):
+            return jsonify({"status": "error", "message": "Solde insuffisant"}), 400
+
+        cur.execute("BEGIN;")
+        cur.execute("UPDATE comptes SET solde = solde - %s WHERE id = %s;", (montant, source))
+        cur.execute("UPDATE comptes SET solde = solde + %s WHERE id = %s;", (montant, dest))
+        cur.execute("""
+            INSERT INTO transactions (compte_source_id, compte_dest_id, montant, type_transaction, description)
+            VALUES (%s, %s, %s, 'virement', %s);
+        """, (source, dest, montant, description))
+        cur.execute("COMMIT;")
+
+        cur.close()
+        conn.close()
+        return jsonify({"status": "ok", "message": "Virement effectué"}), 200
+
+    except Exception as e:
+        print("Erreur /api/virement:", e)
+        conn.rollback()
+        return jsonify({"status": "error", "message": "Erreur lors du virement"}), 500
+
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    """Déconnexion"""
+    return jsonify({"status": "ok", "message": "Déconnexion réussie"}), 200
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    """Vérifie si le backend est actif"""
+    return jsonify({"status": "ok", "message": "Backend opérationnel"}), 200
+
+
+# =============================
+# 🔹 Lancement de l'application
+# =============================
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
