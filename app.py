@@ -7,7 +7,7 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import hashlib
 
-app = Flask(_name_)
+app = Flask(__name__)
 
 # =============================
 # 🔹 Configuration
@@ -18,7 +18,7 @@ DB_CONFIG = {
     'port': 5432,
     'database': 'banking_db',
     'user': 'banking_user',
-    'password': 'Postgresql'  # Ton mot de passe PostgreSQL
+    'password': 'SecureP@ss2025!'  # Ton mot de passe PostgreSQL
 }
 
 SMTP_SERVER = "smtp.gmail.com"
@@ -139,5 +139,5 @@ def verify_mfa():
         return jsonify({"status": "error", "message": "Code incorrect"}), 401
 
 
-if _name_ == '_main_':
+if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
